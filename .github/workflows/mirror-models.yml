@@ -1,8 +1,9 @@
-name: Mirror model release
+name: Mirror data releases
 
-# Copies every asset of the upstream "whisper-models-v1" release into a release of the same
-# name on this repository, one file at a time, on GitHub's own network. Safe to re-run: assets
-# already present here with the right size are skipped.
+# Copies every asset of the upstream data releases (speech models, language packs, word-pair and
+# word-triple tables, glide dictionaries) into releases of the same names on this repository, one
+# file at a time, on GitHub's own network. Safe to re-run: assets already present here with the
+# right size are skipped.
 
 on:
   workflow_dispatch:
@@ -11,8 +12,8 @@ permissions:
   contents: write
 
 env:
-  TAG: whisper-models-v1
   UPSTREAM: DevEmperor/DictateKeyboard
+  TAGS: whisper-models-v1 language-packs-v1 bigram-dicts-v1 trigram-dicts-v1 glide-dicts-v1
   GH_TOKEN: ${{ github.token }}
 
 jobs:
@@ -20,41 +21,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - name: Ensure the release exists here
-        run: |
-          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
-              --title "Model files" \
-              --notes "Mirror of the $UPSTREAM $TAG release: on-device speech models used by the app."
-          fi
-
-      - name: Copy each asset
+      - name: Copy each release
         run: |
           set -euo pipefail
           mkdir -p work
-          # name<TAB>size for every upstream asset
-          gh release view "$TAG" -R "$UPSTREAM" --json assets \
-            --jq '.assets[] | "\(.name)\t\(.size)"' > upstream.tsv
-          # name<TAB>size for what is already here
-          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets[] | "\(.name)\t\(.size)"' > here.tsv || true
-          total=$(wc -l < upstream.tsv)
-          n=0
-          while IFS=$'\t' read -r name size; do
-            n=$((n + 1))
-            if grep -Fqx "$name	$size" here.tsv; then
-              echo "[$n/$total] skip $name (already mirrored)"
-              continue
+          for TAG in $TAGS; do
+            echo "=== $TAG ==="
+            if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              title=$(gh release view "$TAG" -R "$UPSTREAM" --json name --jq .name)
+              gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+                --title "$title" \
+                --notes "Mirror of the $UPSTREAM $TAG release."
             fi
-            echo "[$n/$total] copy $name ($size bytes)"
-            rm -f "work/$name"
-            gh release download "$TAG" -R "$UPSTREAM" -p "$name" -D work --clobber
-            got=$(stat -c %s "work/$name")
-            if [ "$got" != "$size" ]; then
-              echo "size mismatch for $name: expected $size, got $got" >&2
-              exit 1
-            fi
-            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" "work/$name" --clobber
-            rm -f "work/$name"
-          done < upstream.tsv
-          echo "done: $total assets present on $GITHUB_REPOSITORY"
+            gh release view "$TAG" -R "$UPSTREAM" --json assets \
+              --jq '.assets[] | "\(.name)\t\(.size)"' > upstream.tsv
+            gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets \
+              --jq '.assets[] | "\(.name)\t\(.size)"' > here.tsv || true
+            total=$(wc -l < upstream.tsv)
+            n=0
+            while IFS=$'\t' read -r name size; do
+              n=$((n + 1))
+              if grep -Fqx "$name	$size" here.tsv; then
+                echo "[$TAG $n/$total] skip $name"
+                continue
+              fi
+              echo "[$TAG $n/$total] copy $name ($size bytes)"
+              rm -f "work/$name"
+              gh release download "$TAG" -R "$UPSTREAM" -p "$name" -D work --clobber
+              got=$(stat -c %s "work/$name")
+              if [ "$got" != "$size" ]; then
+                echo "size mismatch for $name: expected $size, got $got" >&2
+                exit 1
+              fi
+              gh release upload "$TAG" -R "$GITHUB_REPOSITORY" "work/$name" --clobber
+              rm -f "work/$name"
+            done < upstream.tsv
+            echo "done: $TAG ($total assets)"
+          done
